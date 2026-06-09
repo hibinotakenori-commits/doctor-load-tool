@@ -1,0 +1,10 @@
+# データファイル（ローカル開発用。クラウドでは Google Sheets を使う）
+data/
+
+# Streamlit のローカル設定
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+.env
