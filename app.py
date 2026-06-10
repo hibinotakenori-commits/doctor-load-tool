@@ -35,20 +35,17 @@ DEFAULT_MEMBERS = [
 # ===== Google Sheets 接続 =====
 
 def get_gsheet_client():
-    """Streamlit Cloud 上で Google Sheets クライアントを返す。失敗したら None。"""
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        creds = Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=[
-                "https://spreadsheets.google.com/feeds",
-                "https://www.googleapis.com/auth/drive",
-            ],
-        )
-        return gspread.authorize(creds)
-    except Exception:
-        return None
+    """Streamlit Cloud 上で Google Sheets クライアントを返す。失敗したら例外を再送出。"""
+    import gspread
+    from google.oauth2.service_account import Credentials
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=[
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive",
+        ],
+    )
+    return gspread.authorize(creds)
 
 
 def get_or_create_worksheet(sh, name: str, rows: int = 1000, cols: int = 20):
