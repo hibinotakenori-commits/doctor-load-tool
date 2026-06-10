@@ -74,7 +74,7 @@ def load_members() -> list[str]:
             members = [v for v in values if v and v != "医師名"]
             return members if members else DEFAULT_MEMBERS
         except Exception as e:
-            st.warning(f"名簿の読み込みに失敗しました: {e}")
+            st.warning(f"名簿の読み込みに失敗しました: [{type(e).__name__}] {e!r}")
             return DEFAULT_MEMBERS
     # ローカル CSV
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -132,7 +132,7 @@ def load_data() -> pd.DataFrame:
             df = pd.DataFrame(records)
             return _normalize_df(df)
         except Exception as e:
-            st.warning(f"データの読み込みに失敗しました: {e}")
+            st.warning(f"データの読み込みに失敗しました: [{type(e).__name__}] {e!r}")
             return pd.DataFrame(columns=COLUMNS)
     # ローカル CSV
     os.makedirs(DATA_DIR, exist_ok=True)
