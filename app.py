@@ -94,7 +94,7 @@ def save_members(members: list[str]):
             sh = gc.open_by_key(st.secrets["spreadsheet_id"])
             ws = get_or_create_worksheet(sh, "members")
             ws.clear()
-            ws.update([["医師名"]] + [[m] for m in members])
+            ws.update("A1", [["医師名"]] + [[m] for m in members])
         except Exception as e:
             st.error(f"名簿の保存に失敗しました: {e}")
         return
@@ -162,7 +162,7 @@ def save_data(df: pd.DataFrame):
             ws.clear()
             # ヘッダー＋全行を一括書き込み
             rows = [COLUMNS] + df[COLUMNS].astype(str).values.tolist()
-            ws.update(rows)
+            ws.update("A1", rows)
         except Exception as e:
             st.error(f"データの保存に失敗しました: {e}")
         return
