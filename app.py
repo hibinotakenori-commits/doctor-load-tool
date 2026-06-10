@@ -51,6 +51,15 @@ def get_gsheet_client():
         return None
 
 
+def get_or_create_worksheet(sh, name: str, rows: int = 1000, cols: int = 20):
+    """指定名のワークシートを取得。なければ作成して返す。"""
+    import gspread
+    try:
+        return sh.worksheet(name)
+    except gspread.exceptions.WorksheetNotFound:
+        return sh.add_worksheet(title=name, rows=rows, cols=cols)
+
+
 def use_gsheet() -> bool:
     """Google Sheets を使う環境かどうかを判定する。"""
     return "gcp_service_account" in st.secrets and "spreadsheet_id" in st.secrets
@@ -63,7 +72,7 @@ def load_members() -> list[str]:
         try:
             gc = get_gsheet_client()
             sh = gc.open_by_key(st.secrets["spreadsheet_id"])
-            ws = sh.worksheet("members")
+            ws = get_or_create_worksheet(sh, "members")
             values = ws.col_values(1)  # A列を全部取得
             members = [v for v in values if v and v != "医師名"]
             return members if members else DEFAULT_MEMBERS
@@ -86,7 +95,7 @@ def save_members(members: list[str]):
         try:
             gc = get_gsheet_client()
             sh = gc.open_by_key(st.secrets["spreadsheet_id"])
-            ws = sh.worksheet("members")
+            ws = get_or_create_worksheet(sh, "members")
             ws.clear()
             ws.update([["医師名"]] + [[m] for m in members])
         except Exception as e:
@@ -119,7 +128,7 @@ def load_data() -> pd.DataFrame:
         try:
             gc = get_gsheet_client()
             sh = gc.open_by_key(st.secrets["spreadsheet_id"])
-            ws = sh.worksheet("doctors")
+            ws = get_or_create_worksheet(sh, "doctors")
             records = ws.get_all_records()
             if not records:
                 return pd.DataFrame(columns=COLUMNS)
@@ -152,7 +161,7 @@ def save_data(df: pd.DataFrame):
         try:
             gc = get_gsheet_client()
             sh = gc.open_by_key(st.secrets["spreadsheet_id"])
-            ws = sh.worksheet("doctors")
+            ws = get_or_create_worksheet(sh, "doctors")
             ws.clear()
             # ヘッダー＋全行を一括書き込み
             rows = [COLUMNS] + df[COLUMNS].astype(str).values.tolist()
