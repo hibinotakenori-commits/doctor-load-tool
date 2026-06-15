@@ -499,6 +499,11 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         return default
 
     st.markdown(f"### {doctor_name} さんの入力フォーム")
+
+    # クリア回数をカウンターで管理（増えるとウィジェットkeyが変わり完全リセット）
+    counter_key = f"__clear_count_{doctor_name}"
+    clear_count = st.session_state.get(counter_key, 0)
+
     if doctor_name in today_done:
         st.warning("今日すでに入力済みです。内容を確認・修正して再保存できます。")
         if st.button("🗑️ 入力内容をクリア", type="secondary"):
@@ -506,22 +511,14 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             df = df[~mask]
             st.session_state.df = df
             save_data(df)
-            # クリアフラグを立てる
             st.session_state[cleared_key] = True
-            # ウィジェットのキャッシュを削除してフォームを完全リセット
-            k = doctor_name
-            for key in [f"{k}_patients", f"{k}_critical", f"{k}_new_admission",
-                        f"{k}_discharge", f"{k}_plaza_am", f"{k}_plaza_pm",
-                        f"{k}_general", f"{k}_post_oncall", f"{k}_oncall_start",
-                        f"{k}_meeting", f"{k}_margin", f"{k}_accept", f"{k}_memo",
-                        f"{k}_date"]:
-                st.session_state.pop(key, None)
+            st.session_state[counter_key] = clear_count + 1
             st.rerun()
     else:
-        # 入力済みでない（新規or保存後）場合はクリアフラグをリセット
         st.session_state.pop(cleared_key, None)
 
-    k = doctor_name  # ウィジェットkeyのプレフィックス（医師切替でリセット）
+    # カウンターをkeyに含めることで、クリア後は全ウィジェットが新規作成される
+    k = f"{doctor_name}_{clear_count}"
 
     with st.form("input_form"):
 
