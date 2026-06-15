@@ -1,9 +1,4 @@
 from __future__ import annotations
-"""
-医師負荷可視化ツール
-- ローカル実行時 : data/ フォルダの CSV を使用
-- Streamlit Cloud : Google Sheets を使用（st.secrets で設定）
-"""
 
 import streamlit as st
 import pandas as pd
