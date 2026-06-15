@@ -386,6 +386,7 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             mask = (df["日付"] == today) & (df["医師名"] == doctor_name)
             df = df[~mask]
             st.session_state.df = df
+            save_data(df)
             st.rerun()
 
     with st.form("input_form"):
