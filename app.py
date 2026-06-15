@@ -382,6 +382,11 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
     st.markdown(f"### {doctor_name} さんの入力フォーム")
     if doctor_name in today_done:
         st.warning("今日すでに入力済みです。内容を確認・修正して再保存できます。")
+        if st.button("🗑️ 入力内容をクリア", type="secondary"):
+            mask = (df["日付"] == today) & (df["医師名"] == doctor_name)
+            df = df[~mask]
+            st.session_state.df = df
+            st.rerun()
 
     with st.form("input_form"):
 
