@@ -474,18 +474,24 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
 
     existing = df[(df["日付"] == today) & (df["医師名"] == doctor_name)]
 
-    # 当日データがなければ直近の過去データを引き継ぐ（翌日用）
-    if existing.empty and not df.empty:
+    # クリアされた医師かどうかのフラグ
+    cleared_key = f"__cleared_{doctor_name}"
+    just_cleared = st.session_state.get(cleared_key, False)
+
+    # 当日データがなく、かつクリア直後でなければ直近の過去データを引き継ぐ（翌日用）
+    if existing.empty and not just_cleared and not df.empty:
         past = df[df["医師名"] == doctor_name]
         if not past.empty:
             existing = past.sort_values("日付").iloc[[-1]]
 
     def get_val(col, default):
-        # 当日データがある場合のみ参照（過去データは数値系のみ引き継ぐ）
         today_row = df[(df["日付"] == today) & (df["医師名"] == doctor_name)]
         if not today_row.empty and col in today_row.columns:
             v = today_row.iloc[0][col]
             return v if pd.notna(v) else default
+        # クリア直後は引き継ぎしない
+        if just_cleared:
+            return default
         # 翌日引き継ぎ：受け持ち患者数・重症患者数のみ
         if col in ["受け持ち患者数", "重症患者数"] and not existing.empty and col in existing.columns:
             v = existing.iloc[0][col]
@@ -500,6 +506,8 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             df = df[~mask]
             st.session_state.df = df
             save_data(df)
+            # クリアフラグを立てる
+            st.session_state[cleared_key] = True
             # ウィジェットのキャッシュを削除してフォームを完全リセット
             k = doctor_name
             for key in [f"{k}_patients", f"{k}_critical", f"{k}_new_admission",
@@ -509,6 +517,9 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
                         f"{k}_date"]:
                 st.session_state.pop(key, None)
             st.rerun()
+    else:
+        # 入力済みでない（新規or保存後）場合はクリアフラグをリセット
+        st.session_state.pop(cleared_key, None)
 
     k = doctor_name  # ウィジェットkeyのプレフィックス（医師切替でリセット）
 
