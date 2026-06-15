@@ -4,7 +4,12 @@ import streamlit as st
 import pandas as pd
 import os
 import io
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
+
+JST = timezone(timedelta(hours=9))
+
+def today_jst() -> date:
+    return datetime.now(JST).date()
 
 # ===== 定数 =====
 DATA_DIR = "data"
@@ -320,9 +325,9 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**今日の日付：** {date.today()}")
+    st.sidebar.markdown(f"**今日の日付：** {today_jst()}")
 
-    today = str(date.today())
+    today = str(today_jst())
     today_count = df[df["日付"] == today]["医師名"].nunique() if not df.empty else 0
     st.sidebar.markdown(f"**本日入力済み：** {today_count} / {len(members)} 名")
 
@@ -350,7 +355,7 @@ def main():
 def show_dashboard(df: pd.DataFrame):
     st.header("📊 本日の医師負荷ダッシュボード")
 
-    today = str(date.today())
+    today = str(today_jst())
     today_df = df[df["日付"] == today].copy() if not df.empty else pd.DataFrame(columns=COLUMNS)
 
     if today_df.empty:
@@ -444,7 +449,7 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         st.warning("医師名簿が空です。「医師名簿管理」画面から医師を追加してください。")
         return
 
-    today = str(date.today())
+    today = str(today_jst())
     today_done = df[df["日付"] == today]["医師名"].tolist() if not df.empty else []
 
     member_options = [
@@ -519,12 +524,12 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
     k = f"{doctor_name}_{clear_count}"
 
     # 日付は常に今日を表示する
-    st.session_state[f"{k}_date"] = date.today()
+    st.session_state[f"{k}_date"] = today_jst()
 
     with st.form("input_form"):
 
         st.markdown("**🛏️ 入院患者**")
-        input_date = st.date_input("日付", value=date.today(), key=f"{k}_date")
+        input_date = st.date_input("日付", value=today_jst(), key=f"{k}_date")
         c1, c2 = st.columns(2)
         with c1:
             patients = st.number_input(
@@ -658,7 +663,7 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
 def show_assign_support(df: pd.DataFrame):
     st.header("🆕 新規入院アサイン支援")
 
-    today = str(date.today())
+    today = str(today_jst())
     today_df = df[df["日付"] == today].copy() if not df.empty else pd.DataFrame(columns=COLUMNS)
 
     if today_df.empty:
