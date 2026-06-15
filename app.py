@@ -364,12 +364,22 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         f"{m}　✅ 入力済み" if m in today_done else m
         for m in members
     ]
+
+    # 前回選択した医師を記憶して、保存後も同じ医師を表示する
+    last_doctor = st.session_state.get("last_selected_doctor", members[0])
+    last_labels = [f"{last_doctor}　✅ 入力済み", last_doctor]
+    default_index = next(
+        (i for i, opt in enumerate(member_options) if opt in last_labels), 0
+    )
+
     selected_label = st.selectbox(
         "👤 あなたの名前を選んでください",
         member_options,
+        index=default_index,
         help="入力済みの医師は ✅ が表示されます。再入力すると上書きされます。"
     )
     doctor_name = selected_label.replace("　✅ 入力済み", "")
+    st.session_state["last_selected_doctor"] = doctor_name
 
     existing = df[(df["日付"] == today) & (df["医師名"] == doctor_name)]
 
