@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 医師負荷可視化ツール
 - ローカル実行時 : data/ フォルダの CSV を使用
