@@ -492,8 +492,10 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         # クリア直後は引き継ぎしない
         if just_cleared:
             return default
-        # 翌日引き継ぎ：受け持ち患者数・重症患者数のみ
-        if col in ["受け持ち患者数", "重症患者数"] and not existing.empty and col in existing.columns:
+        # 翌日引き継ぎ：新規入院数のみ0リセット、それ以外は前日値を引き継ぐ
+        if col == "新規入院数":
+            return default
+        if not existing.empty and col in existing.columns:
             v = existing.iloc[0][col]
             return v if pd.notna(v) else default
         return default
