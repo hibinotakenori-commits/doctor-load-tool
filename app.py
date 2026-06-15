@@ -230,26 +230,7 @@ def unavailable_slots(row: pd.Series) -> list[str]:
 # ===== パスワード認証 =====
 
 def check_password() -> bool:
-    """
-    st.secrets に password が設定されている場合のみ認証を行う。
-    ローカル開発時（secrets なし）はスルー。
-    """
-    if "password" not in st.secrets:
-        return True  # ローカル開発時は認証なし
-
-    if st.session_state.get("authenticated"):
-        return True
-
-    st.title("🏥 医師負荷可視化ツール")
-    with st.form("login_form"):
-        pw = st.text_input("パスワードを入力してください", type="password")
-        if st.form_submit_button("ログイン"):
-            if pw == st.secrets["password"]:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("パスワードが違います")
-    return False
+    return True
 
 
 # ===== Streamlit アプリ本体 =====
@@ -291,12 +272,6 @@ def main():
                 for name in not_yet:
                     st.markdown(f"- {name}")
 
-    # ログアウトボタン（パスワード設定時のみ）
-    if "password" in st.secrets:
-        st.sidebar.markdown("---")
-        if st.sidebar.button("🔓 ログアウト"):
-            st.session_state.authenticated = False
-            st.rerun()
 
     if page == "📊 ダッシュボード":
         show_dashboard(df)
