@@ -500,6 +500,14 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             df = df[~mask]
             st.session_state.df = df
             save_data(df)
+            # ウィジェットのキャッシュを削除してフォームを完全リセット
+            k = doctor_name
+            for key in [f"{k}_patients", f"{k}_critical", f"{k}_new_admission",
+                        f"{k}_discharge", f"{k}_plaza_am", f"{k}_plaza_pm",
+                        f"{k}_general", f"{k}_post_oncall", f"{k}_oncall_start",
+                        f"{k}_meeting", f"{k}_margin", f"{k}_accept", f"{k}_memo",
+                        f"{k}_date"]:
+                st.session_state.pop(key, None)
             st.rerun()
 
     k = doctor_name  # ウィジェットkeyのプレフィックス（医師切替でリセット）
