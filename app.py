@@ -594,13 +594,15 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             key=f"{k}_margin"
         )
         accept_options = ["可", "条件付き可", "不可"]
-        current_accept = get_val("新規受入可否", "可")
-        if current_accept not in accept_options:
-            current_accept = "可"
+        current_accept = get_val("新規受入可否", None)
+        if current_accept in accept_options:
+            accept_index = accept_options.index(current_accept)
+        else:
+            accept_index = None  # クリア後または未入力時は未選択
         accept_new = st.radio(
             "新規入院の受入可否",
             accept_options,
-            index=accept_options.index(current_accept),
+            index=accept_index,
             horizontal=True,
             key=f"{k}_accept"
         )
@@ -614,6 +616,9 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         submitted = st.form_submit_button("💾 保存する", use_container_width=True, type="primary")
 
         if submitted:
+            if accept_new is None:
+                st.error("「新規入院の受入可否」を選択してください。")
+                st.stop()
             new_row = {
                 "日付": str(input_date),
                 "医師名": doctor_name,
