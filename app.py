@@ -38,6 +38,7 @@ DEFAULT_WEIGHTS = {
     "退院予定数": -4,
     "プラザ外来_午前": 15,
     "プラザ外来_午後": 15,
+    "プラザ外来_反対時間帯追加": 10,
     "総合外来_患者数": 3,
     "当直明け": 20,
     "当直入り": 10,
@@ -662,24 +663,35 @@ def show_assign_support(df: pd.DataFrame):
     st.markdown("---")
     st.subheader("受入候補医師リスト（負荷スコア低い順）")
 
+    w = st.session_state.get("weights", DEFAULT_WEIGHTS)
     acceptable = today_df[today_df["新規受入可否"].isin(["可", "条件付き可"])].copy()
     not_acceptable = today_df[today_df["新規受入可否"] == "不可"].copy()
 
+    # 同一時間帯のプラザ外来医師は点数に関わらず絶対ブロック
+    opposite = {"午前": "午後", "午後": "午前"}
     if admission_timing in ["午前", "午後"]:
-        col_key = f"プラザ外来_{admission_timing}"
-        plaza_blocked = acceptable[acceptable[col_key].isin([True, "True"])].copy()
-        acceptable = acceptable[~acceptable[col_key].isin([True, "True"])].copy()
+        same_col = f"プラザ外来_{admission_timing}"
+        opp_col = f"プラザ外来_{opposite[admission_timing]}"
+        plaza_blocked = acceptable[acceptable[same_col].isin([True, "True"])].copy()
+        acceptable = acceptable[~acceptable[same_col].isin([True, "True"])].copy()
+        # 反対時間帯に外来がある医師：受入可能だが追加負担点を加算して表示
+        has_opp_plaza = acceptable[opp_col].isin([True, "True"])
+        acceptable["表示スコア"] = acceptable["負荷スコア"] + has_opp_plaza.astype(int) * w.get("プラザ外来_反対時間帯追加", 0)
     else:
         plaza_blocked = pd.DataFrame(columns=COLUMNS)
+        acceptable["表示スコア"] = acceptable["負荷スコア"]
 
     if acceptable.empty:
         st.error("現在、新規入院を受け入れられる医師がいません。チームで対応を検討してください。")
     else:
-        acceptable = acceptable.sort_values("負荷スコア", ascending=True).reset_index(drop=True)
+        acceptable = acceptable.sort_values("表示スコア", ascending=True).reset_index(drop=True)
         for idx, row in acceptable.iterrows():
-            score = row["負荷スコア"]
+            score = row["表示スコア"]
             accept = row["新規受入可否"]
-            blocked_slots = unavailable_slots(row)
+
+            # 反対時間帯外来フラグ
+            has_opp = (admission_timing in ["午前", "午後"] and
+                       row.get(f"プラザ外来_{opposite.get(admission_timing, '')}", False) in [True, "True"])
 
             reasons = []
             if score < LOW_THRESHOLD:
@@ -700,13 +712,16 @@ def show_assign_support(df: pd.DataFrame):
                 reasons.append("条件付きで受入可能")
             if patient_severity == "重症" and int(row["重症患者数"]) > 2:
                 reasons.append("⚠️ すでに重症患者多数")
+            if has_opp:
+                opp_label = opposite[admission_timing]
+                reasons.append(f"⚠️ {opp_label}にプラザ外来あり（{admission_timing}は受入可）")
 
             reason_text = "、".join(reasons) if reasons else "（特記なし）"
+            title = f"{row['状態']} **{row['医師名']}**　スコア {score}点（{get_load_label(int(score))}）　受入：{accept}"
+            if has_opp:
+                title += f"　⚠️ {opposite[admission_timing]}外来あり"
 
-            with st.expander(
-                f"{row['状態']} **{row['医師名']}**　スコア {score}点（{row['負荷レベル']}）　受入：{accept}",
-                expanded=(idx == 0)
-            ):
+            with st.expander(title, expanded=(idx == 0)):
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown(f"- 受け持ち患者数：{row['受け持ち患者数']} 名")
@@ -723,20 +738,30 @@ def show_assign_support(df: pd.DataFrame):
                     st.markdown(f"- 主観的余裕：{row['主観的余裕']} / 5")
                     if row["メモ"]:
                         st.markdown(f"- メモ：{row['メモ']}")
+                if has_opp:
+                    st.warning(f"⚠️ {opposite[admission_timing]}のプラザ外来あり。{admission_timing}の入院は受入可能ですが負担が増えます。")
                 st.success(f"**推奨理由：** {reason_text}")
-                if blocked_slots:
-                    other_slots = [s for s in blocked_slots if s != admission_timing]
-                    if other_slots:
-                        st.info(f"ℹ️ {'・'.join(other_slots)}のプラザ外来あり（今回の時間帯は対応可能）")
 
     if not plaza_blocked.empty:
         st.markdown("---")
-        st.subheader(f"🚫 {admission_timing}はプラザ外来のため対応不可")
+        st.subheader(f"🚫 {admission_timing}はプラザ外来中のため対応不可（点数に関わらず）")
         for _, row in plaza_blocked.sort_values("負荷スコア").iterrows():
             st.markdown(
                 f"- {get_load_color(row['負荷スコア'])} **{row['医師名']}**　"
-                f"スコア {row['負荷スコア']}点　プラザ外来：{plaza_label(row)}"
+                f"プラザ外来：{plaza_label(row)}"
             )
+
+    if admission_timing == "未定":
+        # 未定の場合：プラザ外来のある医師の制約を表示
+        has_plaza = acceptable[
+            acceptable["プラザ外来_午前"].isin([True, "True"]) |
+            acceptable["プラザ外来_午後"].isin([True, "True"])
+        ]
+        if not has_plaza.empty:
+            st.markdown("---")
+            st.info("ℹ️ 入院時間帯を選択すると、プラザ外来中の医師が自動的に対応不可リストに移動します。")
+            for _, row in has_plaza.iterrows():
+                st.markdown(f"- **{row['医師名']}**：プラザ外来 {plaza_label(row)} の時間帯は対応不可")
 
     if not not_acceptable.empty:
         st.markdown("---")
@@ -774,11 +799,18 @@ def show_settings(members: list[str]):
         st.markdown("**外来・当直（固定加算点）**")
         c3, c4 = st.columns(2)
         with c3:
-            w["プラザ外来_午前"] = st.number_input("プラザ外来・午前", value=w["プラザ外来_午前"], min_value=0, max_value=100, step=1)
+            w["プラザ外来_午前"] = st.number_input("プラザ外来・午前（日次スコア加算）", value=w["プラザ外来_午前"], min_value=0, max_value=100, step=1)
             w["当直明け"] = st.number_input("当直明け", value=w["当直明け"], min_value=0, max_value=100, step=1)
         with c4:
-            w["プラザ外来_午後"] = st.number_input("プラザ外来・午後", value=w["プラザ外来_午後"], min_value=0, max_value=100, step=1)
+            w["プラザ外来_午後"] = st.number_input("プラザ外来・午後（日次スコア加算）", value=w["プラザ外来_午後"], min_value=0, max_value=100, step=1)
             w["当直入り"] = st.number_input("当直入り", value=w["当直入り"], min_value=0, max_value=100, step=1)
+
+        st.markdown("**アサイン支援：反対時間帯外来の追加負担点**")
+        st.caption("例：午後入院を検討中、対象医師が午前にプラザ外来ありの場合に加算される点数")
+        w["プラザ外来_反対時間帯追加"] = st.number_input(
+            "反対時間帯プラザ外来・追加負担点",
+            value=w.get("プラザ外来_反対時間帯追加", 10), min_value=0, max_value=100, step=1
+        )
 
         st.markdown("**主観的余裕（係数）**")
         st.caption("余裕1→係数×5点、余裕5→係数×1点 が加算されます")
