@@ -522,6 +522,9 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
     # カウンターをkeyに含めることで、クリア後は全ウィジェットが新規作成される
     k = f"{doctor_name}_{clear_count}"
 
+    # 日付は常に今日を表示する
+    st.session_state[f"{k}_date"] = date.today()
+
     with st.form("input_form"):
 
         st.markdown("**🛏️ 入院患者**")
