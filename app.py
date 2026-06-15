@@ -373,8 +373,20 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
 
     existing = df[(df["日付"] == today) & (df["医師名"] == doctor_name)]
 
+    # 当日データがなければ直近の過去データを引き継ぐ（翌日用）
+    if existing.empty and not df.empty:
+        past = df[df["医師名"] == doctor_name]
+        if not past.empty:
+            existing = past.sort_values("日付").iloc[[-1]]
+
     def get_val(col, default):
-        if not existing.empty and col in existing.columns:
+        # 当日データがある場合のみ参照（過去データは数値系のみ引き継ぐ）
+        today_row = df[(df["日付"] == today) & (df["医師名"] == doctor_name)]
+        if not today_row.empty and col in today_row.columns:
+            v = today_row.iloc[0][col]
+            return v if pd.notna(v) else default
+        # 翌日引き継ぎ：受け持ち患者数・重症患者数のみ
+        if col in ["受け持ち患者数", "重症患者数"] and not existing.empty and col in existing.columns:
             v = existing.iloc[0][col]
             return v if pd.notna(v) else default
         return default
@@ -389,28 +401,30 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             save_data(df)
             st.rerun()
 
+    k = doctor_name  # ウィジェットkeyのプレフィックス（医師切替でリセット）
+
     with st.form("input_form"):
 
         st.markdown("**🛏️ 入院患者**")
-        input_date = st.date_input("日付", value=date.today())
+        input_date = st.date_input("日付", value=date.today(), key=f"{k}_date")
         c1, c2 = st.columns(2)
         with c1:
             patients = st.number_input(
                 "受け持ち患者数", min_value=0, max_value=100,
-                value=int(get_val("受け持ち患者数", 0)), step=1
+                value=int(get_val("受け持ち患者数", 0)), step=1, key=f"{k}_patients"
             )
             new_admission = st.number_input(
                 "新規入院数（本日受けた数）", min_value=0, max_value=20,
-                value=int(get_val("新規入院数", 0)), step=1
+                value=int(get_val("新規入院数", 0)), step=1, key=f"{k}_new_admission"
             )
         with c2:
             critical = st.number_input(
                 "重症患者数", min_value=0, max_value=50,
-                value=int(get_val("重症患者数", 0)), step=1
+                value=int(get_val("重症患者数", 0)), step=1, key=f"{k}_critical"
             )
             discharge = st.number_input(
                 "退院予定数", min_value=0, max_value=30,
-                value=int(get_val("退院予定数", 0)), step=1
+                value=int(get_val("退院予定数", 0)), step=1, key=f"{k}_discharge"
             )
 
         st.divider()
@@ -419,26 +433,27 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         st.caption("担当する時間帯にチェック。その時間帯は新規入院を担当できません。")
         pc1, pc2 = st.columns(2)
         with pc1:
-            plaza_am = st.checkbox("午前", value=bool(get_val("プラザ外来_午前", False)), key="plaza_am")
+            plaza_am = st.checkbox("午前", value=bool(get_val("プラザ外来_午前", False)), key=f"{k}_plaza_am")
         with pc2:
-            plaza_pm = st.checkbox("午後", value=bool(get_val("プラザ外来_午後", False)), key="plaza_pm")
+            plaza_pm = st.checkbox("午後", value=bool(get_val("プラザ外来_午後", False)), key=f"{k}_plaza_pm")
 
         st.divider()
 
         st.markdown("**🏢 総合外来**")
         general_patients = st.number_input(
             "予定患者数", min_value=0, max_value=100,
-            value=int(get_val("総合外来_患者数", 0)), step=1
+            value=int(get_val("総合外来_患者数", 0)), step=1, key=f"{k}_general"
         )
 
         st.divider()
 
         st.markdown("**📋 その他**")
-        post_oncall = st.checkbox("当直明け", value=bool(get_val("当直明け", False)))
+        post_oncall = st.checkbox("当直明け", value=bool(get_val("当直明け", False)), key=f"{k}_post_oncall")
         oncall_start = st.checkbox(
             "当直入り（今夜の当直あり）",
             value=bool(get_val("当直入り", False)),
-            help="今夜の当直に備えて省エネモード。負荷スコアに+10点加算されます。"
+            help="今夜の当直に備えて省エネモード。負荷スコアに+10点加算されます。",
+            key=f"{k}_oncall_start"
         )
         _time_options = ["なし"] + [
             f"{h:02d}:{m:02d}" for h in range(7, 20) for m in (0, 30)
@@ -449,7 +464,8 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             "会議の開始時刻（なし＝会議なし）",
             _time_options,
             index=_meeting_index,
-            help="スコアには影響しません。"
+            help="スコアには影響しません。",
+            key=f"{k}_meeting"
         )
 
         st.divider()
@@ -457,7 +473,8 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
         subjective_margin = st.slider(
             "主観的余裕（1＝余裕なし 〜 5＝余裕あり）",
             min_value=1, max_value=5,
-            value=int(get_val("主観的余裕", 3))
+            value=int(get_val("主観的余裕", 3)),
+            key=f"{k}_margin"
         )
         accept_options = ["可", "条件付き可", "不可"]
         current_accept = get_val("新規受入可否", "可")
@@ -468,11 +485,13 @@ def show_input_form(df: pd.DataFrame, members: list[str]):
             accept_options,
             index=accept_options.index(current_accept),
             horizontal=True,
+            key=f"{k}_accept"
         )
         memo = st.text_area(
             "メモ（任意）",
             value=str(get_val("メモ", "")),
-            placeholder="例：午後から手術あり、重症患者対応中など"
+            placeholder="例：午後から手術あり、重症患者対応中など",
+            key=f"{k}_memo"
         )
 
         submitted = st.form_submit_button("💾 保存する", use_container_width=True, type="primary")
