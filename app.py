@@ -31,6 +31,19 @@ DEFAULT_MEMBERS = [
     "五十嵐", "橋本", "伊藤", "青島", "日比野"
 ]
 
+DEFAULT_WEIGHTS = {
+    "受け持ち患者数": 3,
+    "重症患者数": 10,
+    "新規入院数": 12,
+    "退院予定数": -4,
+    "プラザ外来_午前": 15,
+    "プラザ外来_午後": 15,
+    "総合外来_患者数": 3,
+    "当直明け": 20,
+    "当直入り": 10,
+    "主観的余裕_係数": 5,
+}
+
 
 # ===== Google Sheets 接続 =====
 
@@ -55,6 +68,52 @@ def get_or_create_worksheet(sh, name: str, rows: int = 1000, cols: int = 20):
         return sh.worksheet(name)
     except gspread.exceptions.WorksheetNotFound:
         return sh.add_worksheet(title=name, rows=rows, cols=cols)
+
+
+def load_weights() -> dict:
+    if use_gsheet():
+        try:
+            gc = get_gsheet_client()
+            sh = gc.open_by_key(st.secrets["spreadsheet_id"])
+            ws = get_or_create_worksheet(sh, "settings", rows=50, cols=2)
+            records = ws.get_all_records()
+            w = DEFAULT_WEIGHTS.copy()
+            for r in records:
+                if r.get("key") in w:
+                    w[r["key"]] = int(r["value"])
+            return w
+        except Exception:
+            return DEFAULT_WEIGHTS.copy()
+    path = os.path.join(DATA_DIR, "settings.csv")
+    if os.path.exists(path):
+        try:
+            w = DEFAULT_WEIGHTS.copy()
+            df = pd.read_csv(path, dtype=str)
+            for _, row in df.iterrows():
+                if row["key"] in w:
+                    w[row["key"]] = int(row["value"])
+            return w
+        except Exception:
+            pass
+    return DEFAULT_WEIGHTS.copy()
+
+
+def save_weights(w: dict):
+    rows = [["key", "value"]] + [[k, v] for k, v in w.items()]
+    if use_gsheet():
+        try:
+            gc = get_gsheet_client()
+            sh = gc.open_by_key(st.secrets["spreadsheet_id"])
+            ws = get_or_create_worksheet(sh, "settings", rows=50, cols=2)
+            ws.clear()
+            ws.update("A1", rows)
+        except Exception as e:
+            st.error(f"設定の保存に失敗しました: {e}")
+        return
+    os.makedirs(DATA_DIR, exist_ok=True)
+    pd.DataFrame(rows[1:], columns=["key", "value"]).to_csv(
+        os.path.join(DATA_DIR, "settings.csv"), index=False
+    )
 
 
 def use_gsheet() -> bool:
@@ -172,23 +231,27 @@ def save_data(df: pd.DataFrame):
 
 # ===== スコア計算 =====
 
-def calc_load_score(row: pd.Series) -> int:
-    score = 0
-    score += int(row["受け持ち患者数"]) * 3
-    score += int(row["重症患者数"]) * 10
-    score += int(row["新規入院数"]) * 12
-    score -= int(row["退院予定数"]) * 4
-    if row["プラザ外来_午前"] in [True, "True"]:
-        score += 15
-    if row["プラザ外来_午後"] in [True, "True"]:
-        score += 15
-    score += int(row["総合外来_患者数"]) * 3
-    if row["当直明け"] in [True, "True"]:
-        score += 20
-    if row["当直入り"] in [True, "True"]:
-        score += 10
-    score += (6 - int(row["主観的余裕"])) * 5
-    return max(score, 0)
+def calc_load_score(row: pd.Series, w: dict | None = None) -> int:
+    return sum(calc_score_breakdown(row, w).values())
+
+
+def calc_score_breakdown(row: pd.Series, w: dict | None = None) -> dict:
+    if w is None:
+        w = st.session_state.get("weights", DEFAULT_WEIGHTS)
+    b = {}
+    b["受け持ち患者数"] = int(row["受け持ち患者数"]) * w["受け持ち患者数"]
+    b["重症患者数"] = int(row["重症患者数"]) * w["重症患者数"]
+    b["新規入院数"] = int(row["新規入院数"]) * w["新規入院数"]
+    b["退院予定数"] = int(row["退院予定数"]) * w["退院予定数"]
+    b["プラザ外来_午前"] = w["プラザ外来_午前"] if row["プラザ外来_午前"] in [True, "True"] else 0
+    b["プラザ外来_午後"] = w["プラザ外来_午後"] if row["プラザ外来_午後"] in [True, "True"] else 0
+    b["総合外来_患者数"] = int(row["総合外来_患者数"]) * w["総合外来_患者数"]
+    b["当直明け"] = w["当直明け"] if row["当直明け"] in [True, "True"] else 0
+    b["当直入り"] = w["当直入り"] if row["当直入り"] in [True, "True"] else 0
+    b["主観的余裕"] = (6 - int(row["主観的余裕"])) * w["主観的余裕_係数"]
+    total = max(sum(b.values()), 0)
+    # 合計が0未満にならないよう調整（個別はそのまま）
+    return {k: v for k, v in b.items()}
 
 
 def get_load_label(score: int) -> str:
@@ -245,6 +308,8 @@ def main():
         st.session_state.df = load_data()
     if "members" not in st.session_state:
         st.session_state.members = load_members()
+    if "weights" not in st.session_state:
+        st.session_state.weights = load_weights()
 
     df = st.session_state.df
     members = st.session_state.members
@@ -254,7 +319,7 @@ def main():
 
     page = st.sidebar.radio(
         "画面を選択",
-        ["✏️ 日次入力（医師用）", "📊 ダッシュボード", "🆕 新規入院アサイン支援", "👥 医師名簿管理"]
+        ["✏️ 日次入力（医師用）", "📊 ダッシュボード", "🆕 新規入院アサイン支援", "⚙️ 設定"]
     )
 
     st.sidebar.markdown("---")
@@ -279,8 +344,8 @@ def main():
         show_input_form(df, members)
     elif page == "🆕 新規入院アサイン支援":
         show_assign_support(df)
-    elif page == "👥 医師名簿管理":
-        show_member_management(members)
+    elif page == "⚙️ 設定":
+        show_settings(members)
 
 
 # ===== ダッシュボード画面 =====
@@ -345,6 +410,31 @@ def show_dashboard(df: pd.DataFrame):
         f"🟡 中等度：{LOW_THRESHOLD}〜{HIGH_THRESHOLD-1}点　"
         f"🔴 高負荷：{HIGH_THRESHOLD}点以上"
     )
+
+    st.markdown("---")
+    with st.expander("📊 スコア内訳を見る"):
+        w = st.session_state.get("weights", DEFAULT_WEIGHTS)
+        label_map = {
+            "受け持ち患者数": f"受け持ち患者数（×{w['受け持ち患者数']}点）",
+            "重症患者数": f"重症患者数（×{w['重症患者数']}点）",
+            "新規入院数": f"新規入院数（×{w['新規入院数']}点）",
+            "退院予定数": f"退院予定数（×{w['退院予定数']}点）",
+            "プラザ外来_午前": f"プラザ外来・午前（+{w['プラザ外来_午前']}点）",
+            "プラザ外来_午後": f"プラザ外来・午後（+{w['プラザ外来_午後']}点）",
+            "総合外来_患者数": f"総合外来患者数（×{w['総合外来_患者数']}点）",
+            "当直明け": f"当直明け（+{w['当直明け']}点）",
+            "当直入り": f"当直入り（+{w['当直入り']}点）",
+            "主観的余裕": f"主観的余裕（余裕1→+{5*w['主観的余裕_係数']}点、余裕5→+{1*w['主観的余裕_係数']}点）",
+        }
+        breakdown_rows = []
+        for _, row in today_df.iterrows():
+            bd = calc_score_breakdown(row, w)
+            r = {"医師名": row["医師名"]}
+            r.update({label_map[k]: v for k, v in bd.items()})
+            r["合計"] = max(sum(bd.values()), 0)
+            breakdown_rows.append(r)
+        bd_df = pd.DataFrame(breakdown_rows).set_index("医師名")
+        st.dataframe(bd_df, use_container_width=True)
 
 
 # ===== 日次入力画面（医師用） =====
@@ -659,16 +749,77 @@ def show_assign_support(df: pd.DataFrame):
             )
 
 
-# ===== 医師名簿管理画面 =====
+# ===== 設定画面（医師名簿管理 ＋ 点数の重み付け） =====
 
-def show_member_management(members: list[str]):
-    st.header("👥 医師名簿管理")
-    st.info("診療科のメンバーを管理します。ここで追加・削除した医師が日次入力の選択肢に反映されます。")
+def show_settings(members: list[str]):
+    st.header("⚙️ 設定")
+
+    # ---------- 点数の重み付け ----------
+    st.subheader("📐 負荷スコアの重み付け")
+    st.caption("各項目がスコアに与える点数を変更できます。変更後は「保存する」を押してください。")
+
+    w = st.session_state.get("weights", DEFAULT_WEIGHTS).copy()
+
+    with st.form("weights_form"):
+        st.markdown("**患者数系（1人あたりの点数）**")
+        c1, c2 = st.columns(2)
+        with c1:
+            w["受け持ち患者数"] = st.number_input("受け持ち患者数", value=w["受け持ち患者数"], min_value=0, max_value=50, step=1)
+            w["新規入院数"] = st.number_input("新規入院数", value=w["新規入院数"], min_value=0, max_value=50, step=1)
+            w["総合外来_患者数"] = st.number_input("総合外来（患者数）", value=w["総合外来_患者数"], min_value=0, max_value=50, step=1)
+        with c2:
+            w["重症患者数"] = st.number_input("重症患者数", value=w["重症患者数"], min_value=0, max_value=50, step=1)
+            w["退院予定数"] = st.number_input("退院予定数（マイナス点）", value=w["退院予定数"], min_value=-50, max_value=0, step=1)
+
+        st.markdown("**外来・当直（固定加算点）**")
+        c3, c4 = st.columns(2)
+        with c3:
+            w["プラザ外来_午前"] = st.number_input("プラザ外来・午前", value=w["プラザ外来_午前"], min_value=0, max_value=100, step=1)
+            w["当直明け"] = st.number_input("当直明け", value=w["当直明け"], min_value=0, max_value=100, step=1)
+        with c4:
+            w["プラザ外来_午後"] = st.number_input("プラザ外来・午後", value=w["プラザ外来_午後"], min_value=0, max_value=100, step=1)
+            w["当直入り"] = st.number_input("当直入り", value=w["当直入り"], min_value=0, max_value=100, step=1)
+
+        st.markdown("**主観的余裕（係数）**")
+        st.caption("余裕1→係数×5点、余裕5→係数×1点 が加算されます")
+        w["主観的余裕_係数"] = st.number_input("主観的余裕の係数", value=w["主観的余裕_係数"], min_value=0, max_value=20, step=1)
+
+        if st.form_submit_button("💾 重み付けを保存する", type="primary"):
+            save_weights(w)
+            st.session_state.weights = w
+            st.success("重み付けを保存しました。")
+
+    st.markdown("---")
+
+    # 現在の配点早見表
+    with st.expander("📋 現在の配点早見表"):
+        cw = st.session_state.get("weights", DEFAULT_WEIGHTS)
+        rows = [
+            ["受け持ち患者数", f"1人あたり +{cw['受け持ち患者数']}点"],
+            ["重症患者数", f"1人あたり +{cw['重症患者数']}点"],
+            ["新規入院数", f"1人あたり +{cw['新規入院数']}点"],
+            ["退院予定数", f"1人あたり {cw['退院予定数']}点"],
+            ["プラザ外来・午前", f"+{cw['プラザ外来_午前']}点"],
+            ["プラザ外来・午後", f"+{cw['プラザ外来_午後']}点"],
+            ["総合外来患者数", f"1人あたり +{cw['総合外来_患者数']}点"],
+            ["当直明け", f"+{cw['当直明け']}点"],
+            ["当直入り", f"+{cw['当直入り']}点"],
+            ["主観的余裕 1（余裕なし）", f"+{5 * cw['主観的余裕_係数']}点"],
+            ["主観的余裕 3（中程度）", f"+{3 * cw['主観的余裕_係数']}点"],
+            ["主観的余裕 5（余裕あり）", f"+{1 * cw['主観的余裕_係数']}点"],
+        ]
+        st.table(pd.DataFrame(rows, columns=["項目", "点数"]))
+
+    st.markdown("---")
+
+    # ---------- 医師名簿管理 ----------
+    st.subheader("👥 医師名簿管理")
+    st.caption("診療科のメンバーを管理します。追加・削除した医師が日次入力の選択肢に反映されます。")
 
     col_list, col_edit = st.columns([1, 1])
 
     with col_list:
-        st.subheader("現在のメンバー")
+        st.markdown("**現在のメンバー**")
         if not members:
             st.write("（登録なし）")
         else:
@@ -676,7 +827,6 @@ def show_member_management(members: list[str]):
                 st.markdown(f"{i}. {name}")
 
     with col_edit:
-        st.subheader("医師を追加")
         with st.form("add_member_form"):
             new_name = st.text_input("追加する医師名", placeholder="例：佐々木")
             if st.form_submit_button("➕ 追加する"):
@@ -694,7 +844,6 @@ def show_member_management(members: list[str]):
 
         st.markdown("---")
 
-        st.subheader("医師を削除")
         if members:
             with st.form("remove_member_form"):
                 remove_name = st.selectbox("削除する医師名", members)
@@ -702,14 +851,13 @@ def show_member_management(members: list[str]):
                     members.remove(remove_name)
                     save_members(members)
                     st.session_state.members = members
-                    st.success(f"「{remove_name}」を削除しました。（入力済みデータは残ります）")
+                    st.success(f"「{remove_name}」を削除しました。")
                     st.rerun()
         else:
             st.write("削除できるメンバーがいません。")
 
         st.markdown("---")
 
-        st.subheader("並び順を変更")
         if len(members) >= 2:
             with st.form("reorder_form"):
                 move_name = st.selectbox("移動する医師名", members, key="move_select")
