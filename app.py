@@ -72,6 +72,66 @@ def get_or_create_worksheet(sh, name: str, rows: int = 1000, cols: int = 20):
         return sh.add_worksheet(title=name, rows=rows, cols=cols)
 
 
+WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
+
+
+def load_doctor_settings() -> dict:
+    """医師ごとの設定を返す。{医師名: {"対応不可曜日": ["月","水",...]}}"""
+    if use_gsheet():
+        try:
+            gc = get_gsheet_client()
+            sh = gc.open_by_key(st.secrets["spreadsheet_id"])
+            ws = get_or_create_worksheet(sh, "doctor_settings", rows=50, cols=3)
+            records = ws.get_all_records()
+            result = {}
+            for r in records:
+                name = r.get("医師名", "")
+                days_str = str(r.get("対応不可曜日", ""))
+                days = [d for d in days_str.split(",") if d in WEEKDAYS]
+                if name:
+                    result[name] = {"対応不可曜日": days}
+            return result
+        except Exception:
+            return {}
+    path = os.path.join(DATA_DIR, "doctor_settings.csv")
+    if os.path.exists(path):
+        try:
+            result = {}
+            df = pd.read_csv(path, dtype=str)
+            for _, row in df.iterrows():
+                name = str(row.get("医師名", ""))
+                days_str = str(row.get("対応不可曜日", ""))
+                days = [d for d in days_str.split(",") if d in WEEKDAYS]
+                if name:
+                    result[name] = {"対応不可曜日": days}
+            return result
+        except Exception:
+            pass
+    return {}
+
+
+def save_doctor_settings(settings: dict):
+    """医師ごとの設定を保存する。"""
+    rows = [["医師名", "対応不可曜日"]] + [
+        [name, ",".join(s.get("対応不可曜日", []))]
+        for name, s in settings.items()
+    ]
+    if use_gsheet():
+        try:
+            gc = get_gsheet_client()
+            sh = gc.open_by_key(st.secrets["spreadsheet_id"])
+            ws = get_or_create_worksheet(sh, "doctor_settings", rows=50, cols=3)
+            ws.clear()
+            ws.update("A1", rows)
+        except Exception as e:
+            st.error(f"医師設定の保存に失敗しました: {e}")
+        return
+    os.makedirs(DATA_DIR, exist_ok=True)
+    pd.DataFrame(rows[1:], columns=["医師名", "対応不可曜日"]).to_csv(
+        os.path.join(DATA_DIR, "doctor_settings.csv"), index=False
+    )
+
+
 def load_weights() -> dict:
     if use_gsheet():
         try:
@@ -312,6 +372,8 @@ def main():
         st.session_state.members = load_members()
     if "weights" not in st.session_state:
         st.session_state.weights = load_weights()
+    if "doctor_settings" not in st.session_state:
+        st.session_state.doctor_settings = load_doctor_settings()
 
     df = st.session_state.df
     members = st.session_state.members
@@ -678,6 +740,10 @@ def show_assign_support(df: pd.DataFrame):
     today_df["負荷レベル"] = today_df["負荷スコア"].apply(get_load_label)
     today_df["状態"] = today_df["負荷スコア"].apply(get_load_color)
 
+    # 今日の曜日（対応不可曜日チェック用）
+    today_weekday = WEEKDAYS[today_jst().weekday()]
+    doctor_settings = st.session_state.get("doctor_settings", {})
+
     st.subheader("新規入院の概要")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -789,6 +855,26 @@ def show_assign_support(df: pd.DataFrame):
             st.info("ℹ️ 入院時間帯を選択すると、プラザ外来中の医師が自動的に対応不可リストに移動します。")
             for _, row in has_plaza.iterrows():
                 st.markdown(f"- **{row['医師名']}**：プラザ外来 {plaza_label(row)} の時間帯は対応不可")
+
+    # 曜日設定による対応不可医師
+    weekday_blocked_names = [
+        name for name, s in doctor_settings.items()
+        if today_weekday in s.get("対応不可曜日", [])
+    ]
+    weekday_blocked = acceptable[acceptable["医師名"].isin(weekday_blocked_names)].copy()
+    acceptable = acceptable[~acceptable["医師名"].isin(weekday_blocked_names)].copy()
+    not_acceptable_weekday = not_acceptable[not_acceptable["医師名"].isin(weekday_blocked_names)].copy()
+    not_acceptable = not_acceptable[~not_acceptable["医師名"].isin(weekday_blocked_names)].copy()
+
+    if not weekday_blocked.empty or not not_acceptable_weekday.empty:
+        st.markdown("---")
+        st.subheader(f"📅 本日（{today_weekday}曜日）対応不可の医師（曜日設定）")
+        for _, row in pd.concat([weekday_blocked, not_acceptable_weekday]).sort_values("負荷スコア").iterrows():
+            memo_text = f"　メモ：{row['メモ']}" if row["メモ"] else ""
+            st.markdown(
+                f"- {get_load_color(row['負荷スコア'])} **{row['医師名']}**　"
+                f"スコア {row['負荷スコア']}点　（{today_weekday}曜日は固定対応不可）{memo_text}"
+            )
 
     if not not_acceptable.empty:
         st.markdown("---")
@@ -935,6 +1021,32 @@ def show_settings(members: list[str]):
                         st.rerun()
                     else:
                         st.info("これ以上移動できません。")
+
+    st.markdown("---")
+
+    # ---------- 医師別・対応不可曜日設定 ----------
+    st.subheader("📅 医師別・対応不可曜日の設定")
+    st.caption("固定で対応できない曜日がある医師は、ここで設定してください。アサイン支援画面に反映されます。")
+
+    if not members:
+        st.write("登録された医師がいません。")
+    else:
+        doctor_settings = st.session_state.get("doctor_settings", {})
+        updated_settings = {}
+        with st.form("doctor_settings_form"):
+            for name in members:
+                current_days = doctor_settings.get(name, {}).get("対応不可曜日", [])
+                selected = st.multiselect(
+                    f"{name}　対応不可曜日",
+                    options=WEEKDAYS,
+                    default=current_days,
+                    key=f"unavail_{name}",
+                )
+                updated_settings[name] = {"対応不可曜日": selected}
+            if st.form_submit_button("💾 曜日設定を保存する", type="primary"):
+                save_doctor_settings(updated_settings)
+                st.session_state.doctor_settings = updated_settings
+                st.success("対応不可曜日を保存しました。")
 
 
 if __name__ == "__main__":
