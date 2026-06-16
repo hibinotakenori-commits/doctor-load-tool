@@ -76,7 +76,10 @@ WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 def load_doctor_settings() -> dict:
-    """医師ごとの設定を返す。{医師名: {"対応不可曜日": ["月","水",...]}}"""
+    """医師ごとの設定を返す。
+    {医師名: {"対応不可スロット": ["月_午前", "水_午後", ...]}}
+    """
+    VALID_SLOTS = [f"{d}_{t}" for d in WEEKDAYS for t in ["午前", "午後"]]
     if use_gsheet():
         try:
             gc = get_gsheet_client()
@@ -86,10 +89,10 @@ def load_doctor_settings() -> dict:
             result = {}
             for r in records:
                 name = r.get("医師名", "")
-                days_str = str(r.get("対応不可曜日", ""))
-                days = [d for d in days_str.split(",") if d in WEEKDAYS]
+                slots_str = str(r.get("対応不可スロット", ""))
+                slots = [s for s in slots_str.split(",") if s in VALID_SLOTS]
                 if name:
-                    result[name] = {"対応不可曜日": days}
+                    result[name] = {"対応不可スロット": slots}
             return result
         except Exception:
             return {}
@@ -100,10 +103,10 @@ def load_doctor_settings() -> dict:
             df = pd.read_csv(path, dtype=str)
             for _, row in df.iterrows():
                 name = str(row.get("医師名", ""))
-                days_str = str(row.get("対応不可曜日", ""))
-                days = [d for d in days_str.split(",") if d in WEEKDAYS]
+                slots_str = str(row.get("対応不可スロット", ""))
+                slots = [s for s in slots_str.split(",") if s in VALID_SLOTS]
                 if name:
-                    result[name] = {"対応不可曜日": days}
+                    result[name] = {"対応不可スロット": slots}
             return result
         except Exception:
             pass
@@ -112,8 +115,8 @@ def load_doctor_settings() -> dict:
 
 def save_doctor_settings(settings: dict):
     """医師ごとの設定を保存する。"""
-    rows = [["医師名", "対応不可曜日"]] + [
-        [name, ",".join(s.get("対応不可曜日", []))]
+    rows = [["医師名", "対応不可スロット"]] + [
+        [name, ",".join(s.get("対応不可スロット", []))]
         for name, s in settings.items()
     ]
     if use_gsheet():
@@ -127,7 +130,7 @@ def save_doctor_settings(settings: dict):
             st.error(f"医師設定の保存に失敗しました: {e}")
         return
     os.makedirs(DATA_DIR, exist_ok=True)
-    pd.DataFrame(rows[1:], columns=["医師名", "対応不可曜日"]).to_csv(
+    pd.DataFrame(rows[1:], columns=["医師名", "対応不可スロット"]).to_csv(
         os.path.join(DATA_DIR, "doctor_settings.csv"), index=False
     )
 
@@ -856,11 +859,28 @@ def show_assign_support(df: pd.DataFrame):
             for _, row in has_plaza.iterrows():
                 st.markdown(f"- **{row['医師名']}**：プラザ外来 {plaza_label(row)} の時間帯は対応不可")
 
-    # 曜日設定による対応不可医師
-    weekday_blocked_names = [
-        name for name, s in doctor_settings.items()
-        if today_weekday in s.get("対応不可曜日", [])
-    ]
+    # 曜日×時間帯設定による対応不可医師
+    def is_slot_blocked(name, timing):
+        """timingが「午前」「午後」「未定」のいずれか。未定はどちらかがブロックなら対応不可とみなす。"""
+        slots = doctor_settings.get(name, {}).get("対応不可スロット", [])
+        if timing in ["午前", "午後"]:
+            return f"{today_weekday}_{timing}" in slots
+        # 未定：午前・午後どちらもブロックされていたら対応不可
+        return (f"{today_weekday}_午前" in slots and f"{today_weekday}_午後" in slots)
+
+    def slot_block_label(name):
+        slots = doctor_settings.get(name, {}).get("対応不可スロット", [])
+        blocked = [t for t in ["午前", "午後"] if f"{today_weekday}_{t}" in slots]
+        return "・".join(blocked)
+
+    if admission_timing in ["午前", "午後", "未定"]:
+        weekday_blocked_names = [
+            name for name in (list(acceptable["医師名"]) + list(not_acceptable["医師名"]))
+            if is_slot_blocked(name, admission_timing)
+        ]
+    else:
+        weekday_blocked_names = []
+
     weekday_blocked = acceptable[acceptable["医師名"].isin(weekday_blocked_names)].copy()
     acceptable = acceptable[~acceptable["医師名"].isin(weekday_blocked_names)].copy()
     not_acceptable_weekday = not_acceptable[not_acceptable["医師名"].isin(weekday_blocked_names)].copy()
@@ -868,12 +888,13 @@ def show_assign_support(df: pd.DataFrame):
 
     if not weekday_blocked.empty or not not_acceptable_weekday.empty:
         st.markdown("---")
-        st.subheader(f"📅 本日（{today_weekday}曜日）対応不可の医師（曜日設定）")
+        label = admission_timing if admission_timing != "未定" else "午前・午後ともに"
+        st.subheader(f"📅 {today_weekday}曜日{label}対応不可の医師（曜日設定）")
         for _, row in pd.concat([weekday_blocked, not_acceptable_weekday]).sort_values("負荷スコア").iterrows():
             memo_text = f"　メモ：{row['メモ']}" if row["メモ"] else ""
             st.markdown(
                 f"- {get_load_color(row['負荷スコア'])} **{row['医師名']}**　"
-                f"スコア {row['負荷スコア']}点　（{today_weekday}曜日は固定対応不可）{memo_text}"
+                f"スコア {row['負荷スコア']}点　（{today_weekday}曜日 {slot_block_label(row['医師名'])} は固定対応不可）{memo_text}"
             )
 
     if not not_acceptable.empty:
@@ -1034,19 +1055,31 @@ def show_settings(members: list[str]):
         doctor_settings = st.session_state.get("doctor_settings", {})
         updated_settings = {}
         with st.form("doctor_settings_form"):
+            # ヘッダー行
+            header_cols = st.columns([2] + [1] * len(WEEKDAYS))
+            header_cols[0].markdown("**医師名**")
+            for i, day in enumerate(WEEKDAYS):
+                header_cols[i + 1].markdown(f"**{day}**")
+
             for name in members:
-                current_days = doctor_settings.get(name, {}).get("対応不可曜日", [])
-                selected = st.multiselect(
-                    f"{name}　対応不可曜日",
-                    options=WEEKDAYS,
-                    default=current_days,
-                    key=f"unavail_{name}",
-                )
-                updated_settings[name] = {"対応不可曜日": selected}
+                current_slots = doctor_settings.get(name, {}).get("対応不可スロット", [])
+                selected_slots = []
+                row_cols = st.columns([2] + [1] * len(WEEKDAYS))
+                row_cols[0].markdown(f"{name}")
+                for i, day in enumerate(WEEKDAYS):
+                    with row_cols[i + 1]:
+                        am_key = f"{day}_午前"
+                        pm_key = f"{day}_午後"
+                        if st.checkbox("午前", value=(am_key in current_slots), key=f"unavail_{name}_{day}_am"):
+                            selected_slots.append(am_key)
+                        if st.checkbox("午後", value=(pm_key in current_slots), key=f"unavail_{name}_{day}_pm"):
+                            selected_slots.append(pm_key)
+                updated_settings[name] = {"対応不可スロット": selected_slots}
+
             if st.form_submit_button("💾 曜日設定を保存する", type="primary"):
                 save_doctor_settings(updated_settings)
                 st.session_state.doctor_settings = updated_settings
-                st.success("対応不可曜日を保存しました。")
+                st.success("対応不可曜日・時間帯を保存しました。")
 
 
 if __name__ == "__main__":
