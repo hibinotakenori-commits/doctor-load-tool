@@ -1066,14 +1066,22 @@ def show_settings(members: list[str]):
                 selected_slots = []
                 row_cols = st.columns([2] + [1] * len(WEEKDAYS))
                 row_cols[0].markdown(f"{name}")
+                # 土_午後・日_午前・日_午後はもともと休日のため除外
+                ALWAYS_OFF = {"土_午後", "日_午前", "日_午後"}
                 for i, day in enumerate(WEEKDAYS):
                     with row_cols[i + 1]:
                         am_key = f"{day}_午前"
                         pm_key = f"{day}_午後"
-                        if st.checkbox("午前", value=(am_key in current_slots), key=f"unavail_{name}_{day}_am"):
-                            selected_slots.append(am_key)
-                        if st.checkbox("午後", value=(pm_key in current_slots), key=f"unavail_{name}_{day}_pm"):
-                            selected_slots.append(pm_key)
+                        if am_key in ALWAYS_OFF:
+                            st.markdown("　")  # 空白でレイアウト揃え
+                        else:
+                            if st.checkbox("午前", value=(am_key in current_slots), key=f"unavail_{name}_{day}_am"):
+                                selected_slots.append(am_key)
+                        if pm_key in ALWAYS_OFF:
+                            st.markdown("　")
+                        else:
+                            if st.checkbox("午後", value=(pm_key in current_slots), key=f"unavail_{name}_{day}_pm"):
+                                selected_slots.append(pm_key)
                 updated_settings[name] = {"対応不可スロット": selected_slots}
 
             if st.form_submit_button("💾 曜日設定を保存する", type="primary"):
