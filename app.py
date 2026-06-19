@@ -386,7 +386,7 @@ def main():
 
     page = st.sidebar.radio(
         "画面を選択",
-        ["✏️ 日次入力（医師用）", "📊 ダッシュボード", "🆕 新規入院アサイン支援", "⚙️ 設定"]
+        ["✏️ 日次入力（医師用）", "📊 ダッシュボード", "🆕 新規入院アサイン支援", "📈 トレンド", "⚙️ 設定"]
     )
 
     st.sidebar.markdown("---")
@@ -411,6 +411,8 @@ def main():
         show_input_form(df, members)
     elif page == "🆕 新規入院アサイン支援":
         show_assign_support(df)
+    elif page == "📈 トレンド":
+        show_trend(df, members)
     elif page == "⚙️ 設定":
         show_settings(members)
 
@@ -906,6 +908,76 @@ def show_assign_support(df: pd.DataFrame):
                 f"- {get_load_color(row['負荷スコア'])} **{row['医師名']}**　"
                 f"スコア {row['負荷スコア']}点{memo_text}"
             )
+
+
+# ===== トレンド画面 =====
+
+def show_trend(df: pd.DataFrame, members: list[str]):
+    st.header("📈 負荷スコア トレンド")
+
+    if df.empty:
+        st.info("データがありません。")
+        return
+
+    # 各日付・各医師の最終行のみ使用してスコアを計算
+    df_clean = df.copy()
+    df_clean["日付"] = pd.to_datetime(df_clean["日付"], errors="coerce")
+    df_clean = df_clean.dropna(subset=["日付"])
+    df_clean = df_clean.sort_values("日付")
+    # 同日同医師の最後の行だけ残す
+    last_per_day = df_clean.drop_duplicates(subset=["日付", "医師名"], keep="last").copy()
+    last_per_day["負荷スコア"] = last_per_day.apply(calc_load_score, axis=1)
+    last_per_day["日付_str"] = last_per_day["日付"].dt.strftime("%m/%d")
+
+    if last_per_day.empty:
+        st.info("グラフ化できるデータがありません。")
+        return
+
+    # 表示期間の選択
+    dates = last_per_day["日付"].unique()
+    period = st.selectbox("表示期間", ["直近7日", "直近14日", "直近30日", "全期間"], index=0)
+    cutoff = {
+        "直近7日": pd.Timestamp(today_jst()) - pd.Timedelta(days=6),
+        "直近14日": pd.Timestamp(today_jst()) - pd.Timedelta(days=13),
+        "直近30日": pd.Timestamp(today_jst()) - pd.Timedelta(days=29),
+        "全期間": last_per_day["日付"].min(),
+    }[period]
+    plot_df = last_per_day[last_per_day["日付"] >= cutoff].copy()
+
+    if plot_df.empty:
+        st.info("選択期間にデータがありません。")
+        return
+
+    # 医師フィルター
+    all_doctors = sorted(plot_df["医師名"].unique().tolist())
+    selected = st.multiselect("医師を選択（未選択なら全員）", all_doctors, default=[])
+    if selected:
+        plot_df = plot_df[plot_df["医師名"].isin(selected)]
+
+    # ===== 折れ線グラフ（負荷スコア推移） =====
+    st.subheader("負荷スコアの推移")
+    pivot = plot_df.pivot_table(index="日付", columns="医師名", values="負荷スコア", aggfunc="last")
+    pivot.index = pivot.index.strftime("%m/%d")
+    st.line_chart(pivot)
+
+    # ===== 棒グラフ（直近日の比較） =====
+    latest_date = plot_df["日付"].max()
+    latest_df = plot_df[plot_df["日付"] == latest_date].sort_values("負荷スコア", ascending=False)
+    st.subheader(f"最新日（{latest_date.strftime('%m/%d')}）の負荷スコア比較")
+    st.bar_chart(latest_df[["医師名", "負荷スコア"]].set_index("医師名"))
+
+    # ===== 各医師の受け持ち患者数推移 =====
+    with st.expander("受け持ち患者数の推移"):
+        pivot2 = plot_df.pivot_table(index="日付", columns="医師名", values="受け持ち患者数", aggfunc="last")
+        pivot2.index = pivot2.index.strftime("%m/%d")
+        st.line_chart(pivot2)
+
+    # ===== 生データ表 =====
+    with st.expander("元データを表示"):
+        show_cols = ["日付", "医師名", "負荷スコア", "受け持ち患者数", "重症患者数", "新規入院数", "退院予定数", "主観的余裕"]
+        disp = plot_df[show_cols].copy()
+        disp["日付"] = disp["日付"].dt.strftime("%Y/%m/%d")
+        st.dataframe(disp.sort_values(["日付", "医師名"]).reset_index(drop=True), use_container_width=True)
 
 
 # ===== 設定画面（医師名簿管理 ＋ 点数の重み付け） =====
